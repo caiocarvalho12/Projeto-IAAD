@@ -203,3 +203,25 @@ INSERT INTO partidas (data_partida, id_estadio, id_arbitro, id_selecao_1, id_sel
 ('2026-06-15', 3, 1, 1, 4, 3, 1, 1),
 ('2026-06-18', 1, 2, 2, 3, 2, 2, NULL), -- Empate no MetLife Stadium
 ('2026-06-22', 2, 3, 1, 3, 2, 1, 1); 
+
+
+
+-- Consulta bônus 1: Total de jogadores cadastrados por seleção 
+SELECT s.nome_selecao AS Selecao, COUNT(j.id_jogador) AS Total_Jogadores
+FROM selecoes s
+LEFT JOIN jogadores j ON s.id_selecao = j.id_selecao
+GROUP BY s.id_selecao, s.nome_selecao
+ORDER BY Total_Jogadores DESC;
+
+-- Consulta bônus 2: Média de capacidade dos estádios por país 
+SELECT pais, COUNT(id_estadio) AS qtd_estadios, ROUND(AVG(capacidade), 0) AS media_capacidade
+FROM estadios
+GROUP BY pais;
+
+
+
+
+-- Tentar cadastrar um jogador em uma seleção que NÃO existe (ID 999)
+-- O MySQL DEVE barrar e exibir um erro de Foreign Key
+---INSERT INTO jogadores (nome_jogador, posicao, numero_camisa, data_nascimento, id_selecao) 
+---VALUES ('Jogador Fantasma', 'Atacante', 99, '2000-01-01', 999);
