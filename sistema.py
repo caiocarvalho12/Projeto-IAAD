@@ -6,6 +6,123 @@ import mysql.connector
 from mysql.connector import Error
 import pandas as pd
 from dotenv import load_dotenv
+# ... seus imports existentes ...
+load_dotenv()
+
+# --- NOVA FUNÇÃO DE AUTOMAÇÃO AUTOMÁTICA ---
+# --- FUNÇÃO DE AUTOMAÇÃO AUTOMÁTICA COMPLETA ---
+def init_db():
+    """Liga-se como root para garantir que a base de dados, o utilizador, 
+    as tabelas e os triggers do sistema existem."""
+    root_password = os.getenv('DB_ROOT_PASSWORD', '')
+    custom_user = os.getenv('DB_USER', 'root')
+    custom_password = os.getenv('DB_PASSWORD', '')
+    db_name = os.getenv('DB_NAME', 'copa_do_mundo')
+
+    try:
+        # 1. Liga-se temporariamente como ROOT
+        conn = mysql.connector.connect(
+            host=os.getenv('DB_HOST', 'localhost'),
+            user='root',
+            password=root_password
+        )
+        cursor = conn.cursor()
+
+        # 2. Cria a base de dados se não existir
+        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {db_name};")
+
+        # 3. Configura o utilizador customizado (se não for o root)
+        if custom_user != 'root':
+            try:
+                cursor.execute(f"CREATE USER '{custom_user}'@'localhost' IDENTIFIED BY '{custom_password}';")
+            except mysql.connector.Error:
+                # Se o utilizador já existir, apenas atualiza a senha
+                cursor.execute(f"ALTER USER '{custom_user}'@'localhost' IDENTIFIED BY '{custom_password}';")
+            
+            # Garante permissões totais na base de dados do projeto
+            cursor.execute(f"GRANT ALL PRIVILEGES ON {db_name}.* TO '{custom_user}'@'localhost';")
+            cursor.execute("FLUSH PRIVILEGES;")
+
+        # 4. Entra na base de dados para criar a estrutura de tabelas
+        cursor.execute(f"USE {db_name};")
+
+        # TABELA: Seleções
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS selecoes (
+                id_selecao INT AUTO_INCREMENT PRIMARY KEY,
+                nome_selecao VARCHAR(100) NOT NULL,
+                continente VARCHAR(100) NOT NULL,
+                tecnico VARCHAR(100) NOT NULL,
+                titulos INT DEFAULT 0
+            );
+        """)
+
+        # TABELA: Estádios (Necessária para o JOIN do histórico de partidas)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS estadios (
+                id_estadio INT AUTO_INCREMENT PRIMARY KEY,
+                nome_estadio VARCHAR(100) NOT NULL
+            );
+        """)
+
+        # Insere um estádio padrão (ID 1) para o formulário não falhar no início
+        cursor.execute("""
+            INSERT IGNORE INTO estadios (id_estadio, nome_estadio) 
+            VALUES (1, 'Estádio Nacional de Demonstração');
+        """)
+
+        # TABELA: Partidas
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS partidas (
+                id_partida INT AUTO_INCREMENT PRIMARY KEY,
+                data_partida DATE NOT NULL,
+                id_estadio INT NOT NULL,
+                id_arbitro INT NOT NULL,
+                id_selecao_1 INT NOT NULL,
+                id_selecao_2 INT NOT NULL,
+                quantidade_gols_selecao_1 INT DEFAULT 0,
+                quantidade_gols_selecao_2 INT DEFAULT 0,
+                vencedor INT NULL,
+                FOREIGN KEY (id_estadio) REFERENCES estadios(id_estadio),
+                FOREIGN KEY (id_selecao_1) REFERENCES selecoes(id_selecao),
+                FOREIGN KEY (id_selecao_2) REFERENCES selecoes(id_selecao)
+            );
+        """)
+
+        # 5. Criação Automática do TRIGGER para definir o Vencedor
+        cursor.execute("DROP TRIGGER IF EXISTS trg_definir_vencedor;")
+        cursor.execute("""
+            CREATE TRIGGER trg_definir_vencedor
+            BEFORE INSERT ON partidas
+            FOR EACH ROW
+            BEGIN
+                IF NEW.quantidade_gols_selecao_1 > NEW.quantidade_gols_selecao_2 THEN
+                    SET NEW.vencedor = NEW.id_selecao_1;
+                ELSEIF NEW.quantidade_gols_selecao_2 > NEW.quantidade_gols_selecao_1 THEN
+                    SET NEW.vencedor = NEW.id_selecao_2;
+                ELSE
+                    SET NEW.vencedor = NULL; -- Empate
+                END IF;
+            END;
+        """)
+
+        print(f"✨ [Automação SQL] Estrutura completa de '{db_name}' verificada/criada com sucesso!")
+        
+        cursor.close()
+        conn.close()
+    except mysql.connector.Error as e:
+        print(f"⚠️ Erro na automação da base de dados: {e}")
+
+# Executa a configuração antes de iniciar o servidor Dash
+init_db()
+
+# Configurações Dinâmicas Continuam Iguais aqui para baixo
+DB_CONFIG = {
+    'host': os.getenv('DB_HOST', 'localhost'),
+    'database': os.getenv('DB_NAME', 'copa_do_mundo'),
+    'user': os.getenv('DB_USER', 'root'),
+    'password': os.getenv('DB_PASSWORD', '')
+}
 
 # Carrega as variáveis do arquivo .env local (se ele existir)
 load_dotenv()
