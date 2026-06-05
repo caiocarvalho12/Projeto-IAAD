@@ -57,6 +57,20 @@ def init_db():
             );
         """)
 
+        # TABELA: Jogadores (depende de selecoes)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS jogadores (
+                id_jogador INT AUTO_INCREMENT PRIMARY KEY,
+                nome_jogador VARCHAR(60) NOT NULL,
+                posicao VARCHAR(30) NOT NULL,
+                numero_camisa INT NOT NULL,
+                data_nascimento DATE NOT NULL,
+                id_selecao INT NOT NULL,
+                FOREIGN KEY (id_selecao) REFERENCES selecoes(id_selecao)
+                    ON DELETE CASCADE ON UPDATE CASCADE
+            );
+        """)
+
         # TABELA: Estádios (Necessária para o JOIN do histórico de partidas)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS estadios (
@@ -69,6 +83,22 @@ def init_db():
         cursor.execute("""
             INSERT IGNORE INTO estadios (id_estadio, nome_estadio) 
             VALUES (1, 'Estádio Nacional de Demonstração');
+        """)
+
+        # TABELA: Árbitros (necessária antes de Partidas por causa da FK)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS arbitros (
+                id_arbitro INT AUTO_INCREMENT PRIMARY KEY,
+                nome_arbitro VARCHAR(50) NOT NULL,
+                nacionalidade VARCHAR(30) NOT NULL,
+                funcao ENUM('Principal', 'Assistente', 'VAR') NOT NULL
+            );
+        """)
+
+        # Insere um árbitro padrão (ID 1, função Principal) para o formulário funcionar no início
+        cursor.execute("""
+            INSERT IGNORE INTO arbitros (id_arbitro, nome_arbitro, nacionalidade, funcao)
+            VALUES (1, 'Árbitro Padrão', 'Brasil', 'Principal');
         """)
 
         # TABELA: Partidas
@@ -84,6 +114,7 @@ def init_db():
                 quantidade_gols_selecao_2 INT DEFAULT 0,
                 vencedor INT NULL,
                 FOREIGN KEY (id_estadio) REFERENCES estadios(id_estadio),
+                FOREIGN KEY (id_arbitro) REFERENCES arbitros(id_arbitro),
                 FOREIGN KEY (id_selecao_1) REFERENCES selecoes(id_selecao),
                 FOREIGN KEY (id_selecao_2) REFERENCES selecoes(id_selecao)
             );
@@ -106,12 +137,30 @@ def init_db():
             END;
         """)
 
-        print(f"✨ [Automação SQL] Estrutura completa de '{db_name}' verificada/criada com sucesso!")
+        # 6. Trigger: valida que apenas árbitros 'Principal' podem ser alocados
+        cursor.execute("DROP TRIGGER IF EXISTS trg_valida_arbitro_principal;")
+        cursor.execute("""
+            CREATE TRIGGER trg_valida_arbitro_principal
+            BEFORE INSERT ON partidas
+            FOR EACH ROW
+            BEGIN
+                DECLARE v_funcao VARCHAR(30);
+                SELECT funcao INTO v_funcao
+                FROM arbitros
+                WHERE id_arbitro = NEW.id_arbitro;
+                IF v_funcao != 'Principal' THEN
+                    SIGNAL SQLSTATE '45000'
+                    SET MESSAGE_TEXT = 'Apenas árbitros com função Principal podem ser alocados na partida.';
+                END IF;
+            END;
+        """)
+
+        print(f"[OK] Estrutura completa de '{db_name}' verificada/criada com sucesso!")
         
         cursor.close()
         conn.close()
     except mysql.connector.Error as e:
-        print(f"⚠️ Erro na automação da base de dados: {e}")
+        print(f"[AVISO] Erro na automacao da base de dados: {e}")
 
 # Executa a configuração antes de iniciar o servidor Dash
 init_db()
