@@ -5,8 +5,9 @@ import dash_bootstrap_components as dbc
 import mysql.connector
 from mysql.connector import Error
 import pandas as pd
+import plotly.express as px          # Gráficos interativos (barras, scatter, etc.)
+import plotly.graph_objects as go    # Controle fino de layout e traces
 from dotenv import load_dotenv
-# ... seus imports existentes ...
 load_dotenv()
 
 # --- NOVA FUNÇÃO DE AUTOMAÇÃO AUTOMÁTICA ---
@@ -319,6 +320,39 @@ app.layout = dbc.Container([
                     html.Div(id="tabela-partidas-container")
                 ], md=8)
             ])
+        ]),
+
+        # ABA 3: DASHBOARD DE VISUALIZAÇÕES GRÁFICAS (Bonificação Extra)
+        dbc.Tab(label="📊 Dashboard", children=[
+            dbc.Row([
+                dbc.Col([
+                    html.H4("📊 Dashboard Analítico", className="mt-3"),
+                    html.P(
+                        "Visualizações geradas por consultas SQL não-triviais (JOIN, GROUP BY, SUM, COUNT).",
+                        className="text-muted"
+                    ),
+                    dbc.Button("🔄 Carregar / Atualizar Gráficos", id="btn-refresh-dash",
+                               color="primary", className="mb-3"),
+                ], width=12)
+            ]),
+
+            # Linha 1: Gráfico de Ranking de Vitórias (largura total)
+            dbc.Row([
+                dbc.Col([
+                    # dcc.Graph é o componente Dash que renderiza qualquer gráfico Plotly
+                    dcc.Graph(id="grafico-vitorias")
+                ], width=12)
+            ], className="mb-4"),
+
+            # Linha 2: Dois gráficos lado a lado
+            dbc.Row([
+                dbc.Col([
+                    dcc.Graph(id="grafico-gols")
+                ], md=6),
+                dbc.Col([
+                    dcc.Graph(id="grafico-scatter")
+                ], md=6)
+            ])
         ])
     ])
 ], fluid=True)
@@ -469,6 +503,187 @@ def renderizar_tabela_partidas(n_clicks, alert):
         style_cell={'textAlign': 'center', 'padding': '10px'},
         style_header={'backgroundColor': '#e9ecef', 'fontWeight': 'bold'}
     )
+
+
+# 5. CALLBACK: Dashboard de Visualizações Gráficas
+# Um único callback retorna 3 gráficos ao mesmo tempo (múltiplos Outputs)
+@app.callback(
+    Output("grafico-vitorias", "figure"),   # Ranking de vitórias
+    Output("grafico-gols", "figure"),        # Gols por seleção
+    Output("grafico-scatter", "figure"),     # Scatter: gols marcados vs sofridos
+    Input("btn-refresh-dash", "n_clicks"),
+    prevent_initial_call=True
+)
+def atualizar_dashboard(n_clicks):
+    # Função auxiliar: figura vazia com mensagem quando não há dados
+    def figura_vazia(mensagem):
+        fig = go.Figure()
+        fig.add_annotation(
+            text=mensagem, showarrow=False,
+            font=dict(size=16, color="gray"),
+            xref="paper", yref="paper", x=0.5, y=0.5
+        )
+        fig.update_layout(
+            xaxis=dict(visible=False), yaxis=dict(visible=False),
+            plot_bgcolor="white", paper_bgcolor="white"
+        )
+        return fig
+
+    # ------------------------------------------------------------------
+    # GRÁFICO 1: Ranking de Vitórias por Seleção
+    # Técnicas SQL: COUNT(*), INNER JOIN, GROUP BY, ORDER BY
+    # Aliases simples (sem acento) para garantir compatibilidade com mysql-connector
+    # ------------------------------------------------------------------
+    query_vitorias = """
+        SELECT
+            s.nome_selecao AS selecao,
+            COUNT(*)       AS vitorias
+        FROM partidas p
+        INNER JOIN selecoes s ON p.vencedor = s.id_selecao
+        WHERE p.vencedor IS NOT NULL
+        GROUP BY s.nome_selecao
+        ORDER BY vitorias DESC
+    """
+    dados_vitorias, _ = query_db(query_vitorias)
+
+    if dados_vitorias:
+        df_v = pd.DataFrame(dados_vitorias)
+        # Renomeia para exibição legível no gráfico
+        df_v = df_v.rename(columns={"selecao": "Seleção", "vitorias": "Vitórias"})
+        # Barras horizontais: fácil de comparar rankings
+        fig_vitorias = px.bar(
+            df_v,
+            x="Vitórias", y="Seleção",
+            orientation="h",
+            color="Vitórias",
+            color_continuous_scale="Viridis",
+            title="🏅 Ranking de Vitórias por Seleção",
+            text="Vitórias"
+        )
+        fig_vitorias.update_traces(textposition="outside")
+        fig_vitorias.update_layout(
+            yaxis=dict(autorange="reversed"),
+            coloraxis_showscale=False,
+            plot_bgcolor="#f8f9fa",
+            title_font_size=18
+        )
+    else:
+        fig_vitorias = figura_vazia("⚠️ Nenhuma partida com vencedor registrada ainda.")
+
+    # ------------------------------------------------------------------
+    # GRÁFICO 2: Total de Gols Marcados por Seleção
+    # Técnicas SQL: SUM(), UNION ALL, LEFT JOIN, GROUP BY
+    # Soma gols como time 1 + gols como time 2 para cada seleção
+    # ------------------------------------------------------------------
+    query_gols = """
+        SELECT
+            s.nome_selecao   AS selecao,
+            SUM(gols_totais) AS gols_marcados
+        FROM (
+            SELECT id_selecao_1 AS id_sel, quantidade_gols_selecao_1 AS gols_totais FROM partidas
+            UNION ALL
+            SELECT id_selecao_2 AS id_sel, quantidade_gols_selecao_2 AS gols_totais FROM partidas
+        ) AS todos_gols
+        LEFT JOIN selecoes s ON todos_gols.id_sel = s.id_selecao
+        GROUP BY s.nome_selecao
+        ORDER BY gols_marcados DESC
+    """
+    dados_gols, _ = query_db(query_gols)
+
+    if dados_gols:
+        df_g = pd.DataFrame(dados_gols)
+        df_g = df_g.rename(columns={"selecao": "Seleção", "gols_marcados": "Gols Marcados"})
+        fig_gols = px.bar(
+            df_g,
+            x="Seleção", y="Gols Marcados",
+            color="Gols Marcados",
+            color_continuous_scale="OrRd",
+            title="⚽ Total de Gols Marcados por Seleção",
+            text="Gols Marcados"
+        )
+        fig_gols.update_traces(textposition="outside")
+        fig_gols.update_layout(
+            coloraxis_showscale=False,
+            plot_bgcolor="#f8f9fa",
+            title_font_size=16
+        )
+    else:
+        fig_gols = figura_vazia("⚠️ Nenhuma partida registrada ainda.")
+
+    # ------------------------------------------------------------------
+    # GRÁFICO 3: Scatter — Gols Feitos vs Gols Sofridos por Seleção
+    # Técnicas SQL: SUM(), UNION ALL, LEFT JOIN, GROUP BY, HAVING
+    # Cada "bolha" = uma seleção. Tamanho = nº de partidas jogadas.
+    # Seleções abaixo da diagonal = saldo de gols positivo!
+    # ------------------------------------------------------------------
+    query_scatter = """
+        SELECT
+            s.nome_selecao AS selecao,
+            SUM(feitos)    AS gols_feitos,
+            SUM(sofridos)  AS gols_sofridos,
+            COUNT(*)       AS num_partidas
+        FROM (
+            SELECT id_selecao_1 AS id_sel,
+                   quantidade_gols_selecao_1 AS feitos,
+                   quantidade_gols_selecao_2 AS sofridos
+            FROM partidas
+            UNION ALL
+            SELECT id_selecao_2 AS id_sel,
+                   quantidade_gols_selecao_2 AS feitos,
+                   quantidade_gols_selecao_1 AS sofridos
+            FROM partidas
+        ) AS desempenho
+        LEFT JOIN selecoes s ON desempenho.id_sel = s.id_selecao
+        GROUP BY s.nome_selecao
+        HAVING SUM(feitos) IS NOT NULL
+    """
+    dados_scatter, _ = query_db(query_scatter)
+
+    if dados_scatter and len(dados_scatter) > 0:
+        df_s = pd.DataFrame(dados_scatter)
+        df_s = df_s.rename(columns={
+            "selecao":       "Seleção",
+            "gols_feitos":   "Gols Feitos",
+            "gols_sofridos": "Gols Sofridos",
+            "num_partidas":  "Partidas"
+        })
+        # Garante que as colunas numéricas não tenham NaN (substitui por 0)
+        df_s["Gols Feitos"]   = pd.to_numeric(df_s["Gols Feitos"],   errors="coerce").fillna(0)
+        df_s["Gols Sofridos"] = pd.to_numeric(df_s["Gols Sofridos"], errors="coerce").fillna(0)
+        df_s["Partidas"]      = pd.to_numeric(df_s["Partidas"],      errors="coerce").fillna(1)
+
+        fig_scatter = px.scatter(
+            df_s,
+            x="Gols Feitos", y="Gols Sofridos",
+            size="Partidas",
+            color="Seleção",
+            hover_name="Seleção",
+            text="Seleção",
+            title="🔵 Gols Feitos vs Sofridos (Análise de Desempenho)",
+            size_max=40
+        )
+        fig_scatter.update_traces(textposition="top center")
+        fig_scatter.update_layout(
+            plot_bgcolor="#f8f9fa",
+            title_font_size=16,
+            showlegend=False
+        )
+        # Linha diagonal de referência: abaixo = saldo positivo, acima = saldo negativo
+        max_val = float(max(df_s["Gols Feitos"].max(), df_s["Gols Sofridos"].max())) + 1
+        if max_val > 0:
+            fig_scatter.add_shape(
+                type="line", line=dict(dash="dot", color="gray", width=1),
+                x0=0, y0=0, x1=max_val, y1=max_val
+            )
+            fig_scatter.add_annotation(
+                x=max_val * 0.75, y=max_val * 0.85,
+                text="Saldo Neutro", showarrow=False,
+                font=dict(color="gray", size=10)
+            )
+    else:
+        fig_scatter = figura_vazia("⚠️ Dados insuficientes para o gráfico de desempenho.")
+
+    return fig_vitorias, fig_gols, fig_scatter
 
 
 # Execução do Servidor
