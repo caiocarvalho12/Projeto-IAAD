@@ -252,6 +252,70 @@ app.layout = dbc.Container([
             ])
         ]),
 
+        # ABA: EXPLORADOR DE CONSULTAS DINÂMICAS
+        dbc.Tab(label="🔍 Explorador SQL", children=[
+            dbc.Row([
+                dbc.Col([
+                    html.H4("Construtor de Consultas Dinâmico", className="mt-3"),
+                    html.P("Crie consultas personalizadas aplicando JOINs e Filtros.", className="text-muted"),
+
+                    dbc.Label("Colunas para Visualizar (SELECT):"),
+                    dbc.Input(id="dyn-cols", value="*", placeholder="Ex: selecoes.nome_selecao, jogadores.nome_jogador"),
+
+                    dbc.Row([
+                        dbc.Col([
+                            dbc.Label("Tabela Principal (FROM):"),
+                            dbc.Select(id="dyn-tab1", options=[
+                                {"label": "Seleções", "value": "selecoes"},
+                                {"label": "Jogadores", "value": "jogadores"},
+                                {"label": "Partidas", "value": "partidas"},
+                                {"label": "Estádios", "value": "estadios"},
+                                {"label": "Árbitros", "value": "arbitros"}
+                            ], value="selecoes"),
+                        ], md=6),
+                        dbc.Col([
+                            dbc.Label("Tipo de JOIN:"),
+                            dbc.Select(id="dyn-join-type", options=[
+                                {"label": "Nenhum (Apenas Tab. 1)", "value": ""},
+                                {"label": "INNER JOIN", "value": "INNER JOIN"},
+                                {"label": "LEFT JOIN", "value": "LEFT JOIN"},
+                                {"label": "RIGHT JOIN", "value": "RIGHT JOIN"}
+                            ], value=""),
+                        ], md=6)
+                    ], className="mt-2"),
+
+                    dbc.Row([
+                        dbc.Col([
+                            dbc.Label("Tabela Secundária (JOIN):"),
+                            dbc.Select(id="dyn-tab2", options=[
+                                {"label": "Nenhuma", "value": ""},
+                                {"label": "Seleções", "value": "selecoes"},
+                                {"label": "Jogadores", "value": "jogadores"},
+                                {"label": "Partidas", "value": "partidas"},
+                                {"label": "Estádios", "value": "estadios"},
+                                {"label": "Árbitros", "value": "arbitros"}
+                            ], value=""),
+                        ], md=6),
+                        dbc.Col([
+                            dbc.Label("Condição do JOIN (ON):"),
+                            dbc.Input(id="dyn-on", placeholder="Ex: selecoes.id_selecao = jogadores.id_selecao"),
+                        ], md=6)
+                    ], className="mt-2"),
+
+                    dbc.Label("Filtros (WHERE):", className="mt-2"),
+                    dbc.Input(id="dyn-where", placeholder="Ex: jogadores.posicao = 'Atacante'"),
+
+                    dbc.Button("🚀 Executar Consulta", id="btn-run-dyn", color="primary", className="mt-3 mb-2"),
+                    html.Div(id="alert-dyn")
+                ], md=4),
+
+                dbc.Col([
+                    html.H4("Resultado da Consulta", className="mt-3"),
+                    html.Div(id="tabela-dyn-container")
+                ], md=8)
+            ])
+        ]),
+
         # ABA 3: DASHBOARD DE VISUALIZAÇÕES GRÁFICAS (Bonificação Extra)
         dbc.Tab(label="📊 Dashboard", children=[
             dbc.Row([
@@ -624,8 +688,6 @@ def cadastrar_partida(n_clicks, data, estadio, arbitro, sel1, sel2, gols1, gols2
     success, msg = mutate_db(query, (data, estadio, arbitro, sel1, sel2, gols1, gols2))
     return dbc.Alert(msg, color="success" if success else "danger")
 
-
-# 4. CALLBACK: Visualização de Partidas (Mostrando o Vencedor calculado pelo Trigger)
 # 4. CALLBACK: Visualização de Partidas (Mostrando o Vencedor calculado pelo Trigger)
 @app.callback(
     Output("tabela-partidas-container", "children"),
@@ -670,6 +732,68 @@ def renderizar_tabela_partidas(n_clicks, alert):
         style_cell={'textAlign': 'center', 'padding': '10px'},
         style_header={'backgroundColor': '#e9ecef', 'fontWeight': 'bold'}
     )
+
+# ======================================================================
+# CONSTRUTOR DE CONSULTAS DINÂMICAS
+# ======================================================================
+@app.callback(
+    Output("tabela-dyn-container", "children"),
+    Output("alert-dyn", "children"),
+    Input("btn-run-dyn", "n_clicks"),
+    State("dyn-cols", "value"),
+    State("dyn-tab1", "value"),
+    State("dyn-join-type", "value"),
+    State("dyn-tab2", "value"),
+    State("dyn-on", "value"),
+    State("dyn-where", "value"),
+    prevent_initial_call=True
+)
+def executar_consulta_dinamica(n_clicks, cols, tab1, join_type, tab2, on_cond, where_cond):
+    # Tratamento caso as colunas fiquem em branco
+    if not cols:
+        cols = "*"
+
+    # Constrói a string SQL baseada nos inputs
+    query = f"SELECT {cols} FROM {tab1}"
+
+    # Adiciona o JOIN se foi solicitado
+    if join_type and join_type != "":
+        if not tab2 or not on_cond:
+            return "", dbc.Alert("Para usar um JOIN, você deve selecionar a Tabela Secundária e preencher a Condição (ON).", color="warning")
+        query += f" {join_type} {tab2} ON {on_cond}"
+
+    # Adiciona os Filtros se houver
+    if where_cond:
+        query += f" WHERE {where_cond}"
+
+    try:
+        # Usa a sua função existente para buscar no MySQL
+        dados, erro = query_db(query)
+
+        if erro:
+            return "", dbc.Alert(f"❌ Erro de Sintaxe SQL: {erro}", color="danger")
+
+        if not dados:
+            return html.P("A consulta foi realizada com sucesso, mas não retornou nenhum registro.", className="text-muted mt-2"), dbc.Alert("Consulta executada (0 registros).", color="info")
+
+        df = pd.DataFrame(dados)
+
+        # Transforma colunas de data/hora em string para evitar erro no componente do Dash
+        for col in df.select_dtypes(include=['object', 'datetime']).columns:
+            df[col] = df[col].astype(str)
+
+        tabela = dash_table.DataTable(
+            data=df.to_dict('records'),
+            columns=[{"name": i, "id": i} for i in df.columns],
+            style_table={'overflowX': 'auto'},
+            style_cell={'textAlign': 'left', 'padding': '10px'},
+            style_header={'backgroundColor': '#e9ecef', 'fontWeight': 'bold'}
+        )
+        
+        return tabela, dbc.Alert(f"✅ Consulta executada com sucesso! Retornou {len(df)} registros.", color="success")
+
+    except Exception as e:
+        return "", dbc.Alert(f"❌ Falha interna ao montar a tabela: {str(e)}", color="danger")
 
 # 5. CALLBACK: Dashboard de Visualizações Gráficas
 # Um único callback retorna 3 gráficos ao mesmo tempo (múltiplos Outputs)
