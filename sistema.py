@@ -8,171 +8,6 @@ import pandas as pd
 import plotly.express as px          # Gráficos interativos (barras, scatter, etc.)
 import plotly.graph_objects as go    # Controle fino de layout e traces
 from dotenv import load_dotenv
-load_dotenv()
-
-# --- NOVA FUNÇÃO DE AUTOMAÇÃO AUTOMÁTICA ---
-# --- FUNÇÃO DE AUTOMAÇÃO AUTOMÁTICA COMPLETA ---
-def init_db():
-    """Liga-se como root para garantir que a base de dados, o utilizador, 
-    as tabelas e os triggers do sistema existem."""
-    root_password = os.getenv('DB_ROOT_PASSWORD', '')
-    custom_user = os.getenv('DB_USER', 'root')
-    custom_password = os.getenv('DB_PASSWORD', '')
-    db_name = os.getenv('DB_NAME', 'copa_do_mundo')
-
-    try:
-        # 1. Liga-se temporariamente como ROOT
-        conn = mysql.connector.connect(
-            host=os.getenv('DB_HOST', 'localhost'),
-            user='root',
-            password=root_password
-        )
-        cursor = conn.cursor()
-
-        # 2. Cria a base de dados se não existir
-        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {db_name};")
-
-        # 3. Configura o utilizador customizado (se não for o root)
-        if custom_user != 'root':
-            try:
-                cursor.execute(f"CREATE USER '{custom_user}'@'localhost' IDENTIFIED BY '{custom_password}';")
-            except mysql.connector.Error:
-                # Se o utilizador já existir, apenas atualiza a senha
-                cursor.execute(f"ALTER USER '{custom_user}'@'localhost' IDENTIFIED BY '{custom_password}';")
-            
-            # Garante permissões totais na base de dados do projeto
-            cursor.execute(f"GRANT ALL PRIVILEGES ON {db_name}.* TO '{custom_user}'@'localhost';")
-            cursor.execute("FLUSH PRIVILEGES;")
-
-        # 4. Entra na base de dados para criar a estrutura de tabelas
-        cursor.execute(f"USE {db_name};")
-
-        # TABELA: Seleções
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS selecoes (
-                id_selecao INT AUTO_INCREMENT PRIMARY KEY,
-                nome_selecao VARCHAR(100) NOT NULL,
-                continente VARCHAR(100) NOT NULL,
-                tecnico VARCHAR(100) NOT NULL,
-                titulos INT DEFAULT 0
-            );
-        """)
-
-        # TABELA: Jogadores (depende de selecoes)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS jogadores (
-                id_jogador INT AUTO_INCREMENT PRIMARY KEY,
-                nome_jogador VARCHAR(60) NOT NULL,
-                posicao VARCHAR(30) NOT NULL,
-                numero_camisa INT NOT NULL,
-                data_nascimento DATE NOT NULL,
-                id_selecao INT NOT NULL,
-                FOREIGN KEY (id_selecao) REFERENCES selecoes(id_selecao)
-                    ON DELETE CASCADE ON UPDATE CASCADE
-            );
-        """)
-
-        # TABELA: Estádios (Necessária para o JOIN do histórico de partidas)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS estadios (
-                id_estadio INT AUTO_INCREMENT PRIMARY KEY,
-                nome_estadio VARCHAR(100) NOT NULL
-            );
-        """)
-
-        # Insere um estádio padrão (ID 1) para o formulário não falhar no início
-        cursor.execute("""
-            INSERT IGNORE INTO estadios (id_estadio, nome_estadio) 
-            VALUES (1, 'Estádio Nacional de Demonstração');
-        """)
-
-        # TABELA: Árbitros (necessária antes de Partidas por causa da FK)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS arbitros (
-                id_arbitro INT AUTO_INCREMENT PRIMARY KEY,
-                nome_arbitro VARCHAR(50) NOT NULL,
-                nacionalidade VARCHAR(30) NOT NULL,
-                funcao ENUM('Principal', 'Assistente', 'VAR') NOT NULL
-            );
-        """)
-
-        # Insere um árbitro padrão (ID 1, função Principal) para o formulário funcionar no início
-        cursor.execute("""
-            INSERT IGNORE INTO arbitros (id_arbitro, nome_arbitro, nacionalidade, funcao)
-            VALUES (1, 'Árbitro Padrão', 'Brasil', 'Principal');
-        """)
-
-        # TABELA: Partidas
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS partidas (
-                id_partida INT AUTO_INCREMENT PRIMARY KEY,
-                data_partida DATE NOT NULL,
-                id_estadio INT NOT NULL,
-                id_arbitro INT NOT NULL,
-                id_selecao_1 INT NOT NULL,
-                id_selecao_2 INT NOT NULL,
-                quantidade_gols_selecao_1 INT DEFAULT 0,
-                quantidade_gols_selecao_2 INT DEFAULT 0,
-                vencedor INT NULL,
-                FOREIGN KEY (id_estadio) REFERENCES estadios(id_estadio),
-                FOREIGN KEY (id_arbitro) REFERENCES arbitros(id_arbitro),
-                FOREIGN KEY (id_selecao_1) REFERENCES selecoes(id_selecao),
-                FOREIGN KEY (id_selecao_2) REFERENCES selecoes(id_selecao)
-            );
-        """)
-
-        # 5. Criação Automática do TRIGGER para definir o Vencedor
-        cursor.execute("DROP TRIGGER IF EXISTS trg_definir_vencedor;")
-        cursor.execute("""
-            CREATE TRIGGER trg_definir_vencedor
-            BEFORE INSERT ON partidas
-            FOR EACH ROW
-            BEGIN
-                IF NEW.quantidade_gols_selecao_1 > NEW.quantidade_gols_selecao_2 THEN
-                    SET NEW.vencedor = NEW.id_selecao_1;
-                ELSEIF NEW.quantidade_gols_selecao_2 > NEW.quantidade_gols_selecao_1 THEN
-                    SET NEW.vencedor = NEW.id_selecao_2;
-                ELSE
-                    SET NEW.vencedor = NULL; -- Empate
-                END IF;
-            END;
-        """)
-
-        # 6. Trigger: valida que apenas árbitros 'Principal' podem ser alocados
-        cursor.execute("DROP TRIGGER IF EXISTS trg_valida_arbitro_principal;")
-        cursor.execute("""
-            CREATE TRIGGER trg_valida_arbitro_principal
-            BEFORE INSERT ON partidas
-            FOR EACH ROW
-            BEGIN
-                DECLARE v_funcao VARCHAR(30);
-                SELECT funcao INTO v_funcao
-                FROM arbitros
-                WHERE id_arbitro = NEW.id_arbitro;
-                IF v_funcao != 'Principal' THEN
-                    SIGNAL SQLSTATE '45000'
-                    SET MESSAGE_TEXT = 'Apenas árbitros com função Principal podem ser alocados na partida.';
-                END IF;
-            END;
-        """)
-
-        print(f"[OK] Estrutura completa de '{db_name}' verificada/criada com sucesso!")
-        
-        cursor.close()
-        conn.close()
-    except mysql.connector.Error as e:
-        print(f"[AVISO] Erro na automacao da base de dados: {e}")
-
-# Executa a configuração antes de iniciar o servidor Dash
-init_db()
-
-# Configurações Dinâmicas Continuam Iguais aqui para baixo
-DB_CONFIG = {
-    'host': os.getenv('DB_HOST', 'localhost'),
-    'database': os.getenv('DB_NAME', 'copa_do_mundo'),
-    'user': os.getenv('DB_USER', 'root'),
-    'password': os.getenv('DB_PASSWORD', '')
-}
 
 # Carrega as variáveis do arquivo .env local (se ele existir)
 load_dotenv()
@@ -279,6 +114,101 @@ app.layout = dbc.Container([
             ])
         ]),
         
+        # ABA: GERENCIAR JOGADORES
+        dbc.Tab(label="🏃 Jogadores", children=[
+            dbc.Row([
+                dbc.Col([
+                    html.H4("Formulário do Jogador", className="mt-3"),
+                    html.Div([
+                        dbc.Label("ID (Atualizar/Excluir):"),
+                        dbc.Input(id="jog-id", type="number", placeholder="ID gerado no banco"),
+                        dbc.Label("Nome:", className="mt-2"),
+                        dbc.Input(id="jog-nome", type="text", placeholder="Ex: Vinícius Júnior"),
+                        dbc.Label("Posição:", className="mt-2"),
+                        dbc.Input(id="jog-posicao", type="text", placeholder="Ex: Atacante"),
+                        dbc.Label("Nº Camisa:", className="mt-2"),
+                        dbc.Input(id="jog-camisa", type="number", value=10),
+                        dbc.Label("Data Nascimento:", className="mt-2"),
+                        dbc.Input(id="jog-data", type="date"),
+                        dbc.Label("ID Seleção (FK):", className="mt-2"),
+                        dbc.Input(id="jog-id-sel", type="number"),
+                    ], className="mb-3"),
+                    dbc.Button("✨ Cadastrar", id="btn-create-jog", color="success", className="me-2 mb-2"),
+                    dbc.Button("🔄 Atualizar", id="btn-update-jog", color="warning", className="me-2 mb-2"),
+                    dbc.Button("❌ Excluir", id="btn-delete-jog", color="danger", className="mb-2"),
+                    html.Div(id="alert-jog", className="mt-2")
+                ], md=4),
+                dbc.Col([
+                    html.H4("Jogadores Registrados", className="mt-3"),
+                    dbc.Button("🔄 Atualizar Tabela", id="btn-refresh-jog", color="info", size="sm", className="mb-2"),
+                    html.Div(id="tabela-jogadores-container")
+                ], md=8)
+            ])
+        ]),
+
+        # ABA: GERENCIAR ÁRBITROS
+        dbc.Tab(label="⚖️ Árbitros", children=[
+            dbc.Row([
+                dbc.Col([
+                    html.H4("Formulário do Árbitro", className="mt-3"),
+                    html.Div([
+                        dbc.Label("ID (Atualizar/Excluir):"),
+                        dbc.Input(id="arb-id", type="number", placeholder="ID gerado no banco"),
+                        dbc.Label("Nome:", className="mt-2"),
+                        dbc.Input(id="arb-nome", type="text"),
+                        dbc.Label("Nacionalidade:", className="mt-2"),
+                        dbc.Input(id="arb-nac", type="text"),
+                        dbc.Label("Função:", className="mt-2"),
+                        # Usando um Select (Dropdown) para respeitar o ENUM do banco de dados
+                        dbc.Select(id="arb-funcao", options=[
+                            {"label": "Principal", "value": "Principal"},
+                            {"label": "Assistente", "value": "Assistente"},
+                            {"label": "VAR", "value": "VAR"}
+                        ], value="Principal"),
+                    ], className="mb-3"),
+                    dbc.Button("✨ Cadastrar", id="btn-create-arb", color="success", className="me-2 mb-2"),
+                    dbc.Button("🔄 Atualizar", id="btn-update-arb", color="warning", className="me-2 mb-2"),
+                    dbc.Button("❌ Excluir", id="btn-delete-arb", color="danger", className="mb-2"),
+                    html.Div(id="alert-arb", className="mt-2")
+                ], md=4),
+                dbc.Col([
+                    html.H4("Árbitros Registrados", className="mt-3"),
+                    dbc.Button("🔄 Atualizar Tabela", id="btn-refresh-arb", color="info", size="sm", className="mb-2"),
+                    html.Div(id="tabela-arbitros-container")
+                ], md=8)
+            ])
+        ]),
+
+        # ABA: GERENCIAR ESTÁDIOS
+        dbc.Tab(label="🏟️ Estádios", children=[
+            dbc.Row([
+                dbc.Col([
+                    html.H4("Formulário do Estádio", className="mt-3"),
+                    html.Div([
+                        dbc.Label("ID (Atualizar/Excluir):"),
+                        dbc.Input(id="est-id", type="number", placeholder="ID gerado no banco"),
+                        dbc.Label("Nome do Estádio:", className="mt-2"),
+                        dbc.Input(id="est-nome", type="text"),
+                        dbc.Label("Cidade:", className="mt-2"),
+                        dbc.Input(id="est-cidade", type="text"),
+                        dbc.Label("País:", className="mt-2"),
+                        dbc.Input(id="est-pais", type="text"),
+                        dbc.Label("Capacidade:", className="mt-2"),
+                        dbc.Input(id="est-cap", type="number"),
+                    ], className="mb-3"),
+                    dbc.Button("✨ Cadastrar", id="btn-create-est", color="success", className="me-2 mb-2"),
+                    dbc.Button("🔄 Atualizar", id="btn-update-est", color="warning", className="me-2 mb-2"),
+                    dbc.Button("❌ Excluir", id="btn-delete-est", color="danger", className="mb-2"),
+                    html.Div(id="alert-est", className="mt-2")
+                ], md=4),
+                dbc.Col([
+                    html.H4("Estádios Registrados", className="mt-3"),
+                    dbc.Button("🔄 Atualizar Tabela", id="btn-refresh-est", color="info", size="sm", className="mb-2"),
+                    html.Div(id="tabela-estadios-container")
+                ], md=8)
+            ])
+        ]),
+
         # ABA 2: PARTIDAS (Demonstração do Trigger de Vencedor)
         dbc.Tab(label="📅 Partidas & Trigger", children=[
             dbc.Row([
@@ -435,6 +365,240 @@ def renderizar_tabela_selecoes(n_clicks, alert):
         style_header={'backgroundColor': '#f4f6f9', 'fontWeight': 'bold'}
     )
 
+# ======================================================================
+# TABELA: JOGADORES
+# ======================================================================
+
+# CALLBACK: Gerenciamento de Jogadores (CRUD: Create, Update, Delete)
+@app.callback(
+    Output("alert-jog", "children"),
+    Input("btn-create-jog", "n_clicks"),
+    Input("btn-update-jog", "n_clicks"),
+    Input("btn-delete-jog", "n_clicks"),
+    State("jog-id", "value"),
+    State("jog-nome", "value"),
+    State("jog-posicao", "value"),
+    State("jog-camisa", "value"),
+    State("jog-data", "value"),
+    State("jog-id-sel", "value"),
+    prevent_initial_call=True
+)
+def gerenciar_jogadores(c_clicks, u_clicks, d_clicks, id_jog, nome, posicao, camisa, data, id_sel):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return ""
+    
+    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    
+    # Operação: CREATE
+    if button_id == "btn-create-jog":
+        if not nome or not data or not id_sel:
+            return dbc.Alert("Preencha todos os campos obrigatórios para cadastrar!", color="danger")
+        query = "INSERT INTO jogadores (nome_jogador, posicao, numero_camisa, data_nascimento, id_selecao) VALUES (%s, %s, %s, %s, %s)"
+        success, msg = mutate_db(query, (nome, posicao, camisa, data, id_sel))
+        return dbc.Alert(msg, color="success" if success else "danger")
+        
+    # Operação: UPDATE
+    elif button_id == "btn-update-jog":
+        if not id_jog:
+            return dbc.Alert("Você precisa informar o ID do Jogador que deseja atualizar!", color="danger")
+        query = "UPDATE jogadores SET nome_jogador=%s, posicao=%s, numero_camisa=%s, data_nascimento=%s, id_selecao=%s WHERE id_jogador=%s"
+        success, msg = mutate_db(query, (nome, posicao, camisa, data, id_sel, id_jog))
+        return dbc.Alert(msg, color="success" if success else "danger")
+        
+    # Operação: DELETE
+    elif button_id == "btn-delete-jog":
+        if not id_jog:
+            return dbc.Alert("Você precisa informar o ID do Jogador que deseja excluir!", color="danger")
+        query = "DELETE FROM jogadores WHERE id_jogador = %s"
+        success, msg = mutate_db(query, (id_jog,))
+        return dbc.Alert(msg, color="success" if success else "danger")
+
+    return ""
+
+# CALLBACK: Visualização de Jogadores (READ)
+@app.callback(
+    Output("tabela-jogadores-container", "children"),
+    Input("btn-refresh-jog", "n_clicks"),
+    Input("alert-jog", "children")
+)
+def renderizar_tabela_jogadores(n_clicks, alert):
+    # Usando JOIN para exibir o nome da seleção em vez de apenas o ID numérico
+    query = """
+        SELECT 
+            j.id_jogador AS ID, 
+            j.nome_jogador AS Nome, 
+            j.posicao AS Posição, 
+            j.numero_camisa AS Camisa, 
+            j.data_nascimento AS Nascimento, 
+            s.nome_selecao AS Seleção 
+        FROM jogadores j
+        JOIN selecoes s ON j.id_selecao = s.id_selecao
+    """
+    dados, erro = query_db(query)
+    
+    if erro:
+        return dbc.Alert(f"❌ Erro de Conexão com o Banco: {erro}", color="danger", className="mt-2")
+    
+    if not dados:
+        return html.P("A tabela 'jogadores' está conectada, mas encontra-se vazia no momento.", className="text-muted mt-2")
+    
+    df = pd.DataFrame(dados)
+    
+    # Converte o tipo DATE do MySQL para string para evitar erros no Dash
+    if 'Nascimento' in df.columns:
+        df['Nascimento'] = df['Nascimento'].astype(str)
+        
+    return dash_table.DataTable(
+        data=df.to_dict('records'),
+        columns=[{"name": i, "id": i} for i in df.columns],
+        style_table={'overflowX': 'auto'},
+        style_cell={'textAlign': 'left', 'padding': '10px'},
+        style_header={'backgroundColor': '#f4f6f9', 'fontWeight': 'bold'}
+    )
+
+
+# ======================================================================
+# TABELA: ÁRBITROS
+# ======================================================================
+
+# CALLBACK: Gerenciamento de Árbitros (CRUD: Create, Update, Delete)
+@app.callback(
+    Output("alert-arb", "children"),
+    Input("btn-create-arb", "n_clicks"),
+    Input("btn-update-arb", "n_clicks"),
+    Input("btn-delete-arb", "n_clicks"),
+    State("arb-id", "value"),
+    State("arb-nome", "value"),
+    State("arb-nac", "value"),
+    State("arb-funcao", "value"),
+    prevent_initial_call=True
+)
+def gerenciar_arbitros(c_clicks, u_clicks, d_clicks, id_arb, nome, nac, funcao):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return ""
+    
+    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    
+    if button_id == "btn-create-arb":
+        if not nome or not nac or not funcao:
+            return dbc.Alert("Preencha todos os campos obrigatórios para cadastrar!", color="danger")
+        query = "INSERT INTO arbitros (nome_arbitro, nacionalidade, funcao) VALUES (%s, %s, %s)"
+        success, msg = mutate_db(query, (nome, nac, funcao))
+        return dbc.Alert(msg, color="success" if success else "danger")
+        
+    elif button_id == "btn-update-arb":
+        if not id_arb:
+            return dbc.Alert("Você precisa informar o ID do Árbitro que deseja atualizar!", color="danger")
+        query = "UPDATE arbitros SET nome_arbitro=%s, nacionalidade=%s, funcao=%s WHERE id_arbitro=%s"
+        success, msg = mutate_db(query, (nome, nac, funcao, id_arb))
+        return dbc.Alert(msg, color="success" if success else "danger")
+        
+    elif button_id == "btn-delete-arb":
+        if not id_arb:
+            return dbc.Alert("Você precisa informar o ID do Árbitro que deseja excluir!", color="danger")
+        query = "DELETE FROM arbitros WHERE id_arbitro = %s"
+        success, msg = mutate_db(query, (id_arb,))
+        return dbc.Alert(msg, color="success" if success else "danger")
+
+    return ""
+
+# CALLBACK: Visualização de Árbitros (READ)
+@app.callback(
+    Output("tabela-arbitros-container", "children"),
+    Input("btn-refresh-arb", "n_clicks"),
+    Input("alert-arb", "children")
+)
+def renderizar_tabela_arbitros(n_clicks, alert):
+    dados, erro = query_db("SELECT id_arbitro AS ID, nome_arbitro AS Nome, nacionalidade AS Nacionalidade, funcao AS Função FROM arbitros")
+    
+    if erro:
+        return dbc.Alert(f"❌ Erro de Conexão com o Banco: {erro}", color="danger", className="mt-2")
+    
+    if not dados:
+        return html.P("A tabela 'arbitros' está conectada, mas encontra-se vazia no momento.", className="text-muted mt-2")
+    
+    df = pd.DataFrame(dados)
+    return dash_table.DataTable(
+        data=df.to_dict('records'),
+        columns=[{"name": i, "id": i} for i in df.columns],
+        style_table={'overflowX': 'auto'},
+        style_cell={'textAlign': 'left', 'padding': '10px'},
+        style_header={'backgroundColor': '#f4f6f9', 'fontWeight': 'bold'}
+    )
+
+
+# ======================================================================
+# TABELA: ESTÁDIOS
+# ======================================================================
+
+# CALLBACK: Gerenciamento de Estádios (CRUD: Create, Update, Delete)
+@app.callback(
+    Output("alert-est", "children"),
+    Input("btn-create-est", "n_clicks"),
+    Input("btn-update-est", "n_clicks"),
+    Input("btn-delete-est", "n_clicks"),
+    State("est-id", "value"),
+    State("est-nome", "value"),
+    State("est-cidade", "value"),
+    State("est-pais", "value"),
+    State("est-cap", "value"),
+    prevent_initial_call=True
+)
+def gerenciar_estadios(c_clicks, u_clicks, d_clicks, id_est, nome, cidade, pais, cap):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return ""
+    
+    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    
+    if button_id == "btn-create-est":
+        if not nome or not cidade or not pais:
+            return dbc.Alert("Preencha todos os campos obrigatórios para cadastrar!", color="danger")
+        query = "INSERT INTO estadios (nome_estadio, cidade, pais, capacidade) VALUES (%s, %s, %s, %s)"
+        success, msg = mutate_db(query, (nome, cidade, pais, cap))
+        return dbc.Alert(msg, color="success" if success else "danger")
+        
+    elif button_id == "btn-update-est":
+        if not id_est:
+            return dbc.Alert("Você precisa informar o ID do Estádio que deseja atualizar!", color="danger")
+        query = "UPDATE estadios SET nome_estadio=%s, cidade=%s, pais=%s, capacidade=%s WHERE id_estadio=%s"
+        success, msg = mutate_db(query, (nome, cidade, pais, cap, id_est))
+        return dbc.Alert(msg, color="success" if success else "danger")
+        
+    elif button_id == "btn-delete-est":
+        if not id_est:
+            return dbc.Alert("Você precisa informar o ID do Estádio que deseja excluir!", color="danger")
+        query = "DELETE FROM estadios WHERE id_estadio = %s"
+        success, msg = mutate_db(query, (id_est,))
+        return dbc.Alert(msg, color="success" if success else "danger")
+
+    return ""
+
+# CALLBACK: Visualização de Estádios (READ)
+@app.callback(
+    Output("tabela-estadios-container", "children"),
+    Input("btn-refresh-est", "n_clicks"),
+    Input("alert-est", "children")
+)
+def renderizar_tabela_estadios(n_clicks, alert):
+    dados, erro = query_db("SELECT id_estadio AS ID, nome_estadio AS Estádio, cidade AS Cidade, pais AS País, capacidade AS Capacidade FROM estadios")
+    
+    if erro:
+        return dbc.Alert(f"❌ Erro de Conexão com o Banco: {erro}", color="danger", className="mt-2")
+    
+    if not dados:
+        return html.P("A tabela 'estadios' está conectada, mas encontra-se vazia no momento.", className="text-muted mt-2")
+    
+    df = pd.DataFrame(dados)
+    return dash_table.DataTable(
+        data=df.to_dict('records'),
+        columns=[{"name": i, "id": i} for i in df.columns],
+        style_table={'overflowX': 'auto'},
+        style_cell={'textAlign': 'left', 'padding': '10px'},
+        style_header={'backgroundColor': '#f4f6f9', 'fontWeight': 'bold'}
+    )
 
 # 3. CALLBACK: Inserção de Partidas (Ação disparando o TRIGGER)
 @app.callback(
@@ -462,6 +626,7 @@ def cadastrar_partida(n_clicks, data, estadio, arbitro, sel1, sel2, gols1, gols2
 
 
 # 4. CALLBACK: Visualização de Partidas (Mostrando o Vencedor calculado pelo Trigger)
+# 4. CALLBACK: Visualização de Partidas (Mostrando o Vencedor calculado pelo Trigger)
 @app.callback(
     Output("tabela-partidas-container", "children"),
     Input("btn-refresh-part", "n_clicks"),
@@ -473,6 +638,7 @@ def renderizar_tabela_partidas(n_clicks, alert):
             p.id_partida AS ID, 
             p.data_partida AS Data, 
             e.nome_estadio AS Estádio,
+            a.nome_arbitro AS Árbitro,
             s1.nome_selecao AS `Time 1`, 
             p.quantidade_gols_selecao_1 AS `Gols 1`,
             p.quantidade_gols_selecao_2 AS `Gols 2`, 
@@ -480,6 +646,7 @@ def renderizar_tabela_partidas(n_clicks, alert):
             COALESCE(sv.nome_selecao, 'Empate') AS `Vencedor (via Trigger)`
         FROM partidas p
         JOIN estadios e ON p.id_estadio = e.id_estadio
+        JOIN arbitros a ON p.id_arbitro = a.id_arbitro
         JOIN selecoes s1 ON p.id_selecao_1 = s1.id_selecao
         JOIN selecoes s2 ON p.id_selecao_2 = s2.id_selecao
         LEFT JOIN selecoes sv ON p.vencedor = sv.id_selecao
@@ -503,7 +670,6 @@ def renderizar_tabela_partidas(n_clicks, alert):
         style_cell={'textAlign': 'center', 'padding': '10px'},
         style_header={'backgroundColor': '#e9ecef', 'fontWeight': 'bold'}
     )
-
 
 # 5. CALLBACK: Dashboard de Visualizações Gráficas
 # Um único callback retorna 3 gráficos ao mesmo tempo (múltiplos Outputs)
